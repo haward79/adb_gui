@@ -67,7 +67,7 @@ class Adb:
                             owner = parts[2]
                             group = parts[3]
                             size = parts[4]
-                            date_time = ' '.join([parts[5], parts[6]])
+                            date_time = ' '.join([parts[5], parts[6]]).replace('-', '.')
                             filename = ''.join(parts[7:])
 
                             if size.find('?') == -1:
@@ -82,12 +82,12 @@ class Adb:
                             if permission.find('?') == -1:
                                 # Directory.
                                 if permission.startswith('d'):
-                                    dir = Directory(path_filename + filename)
+                                    dir = Directory(path_filename + filename, date_time, owner, group, permission[1:])
                                     ds.append_content(dir)
 
                                 # File or symbolic link file.
                                 else:
-                                    file = File(path_filename + filename, size)
+                                    file = File(path_filename + filename, size, date_time, owner, group, permission[1:])
                                     ds.append_content(file)
 
         else:

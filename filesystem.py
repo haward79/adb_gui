@@ -2,16 +2,35 @@
 from typing import Union
 
 
+def readable_size(size: int) -> str:
+
+    UNIT = ('Byte', 'KB', 'MB', 'GB', 'TB')
+
+    if size >= 0:
+        level = 0
+        while size >= 1024:
+            level += 1
+            size /= 1024
+
+        return '{:.2f}'.format(size) + ' ' + UNIT[level]
+    else:
+        return ''
+
+
 class File:
 
-    def __init__(self, path_fullname: str = None, size: int = -1):
+    def __init__(self, path_fullname: str = None, size: int = -1, date_time: str = '', owner: str = '', group: str = '', permission: str = ''):
 
         self._path = ''
         self._basename = ''
         self._extname = ''
         self._size = 0
+        self._datetime = ''
+        self._owner = ''
+        self._group = ''
+        self._permission = ''
 
-        self.parse(path_fullname, size)
+        self.parse(path_fullname, size, date_time, owner, group, permission)
 
 
     def get_path(self) -> str:
@@ -47,7 +66,42 @@ class File:
         return self._size
 
 
-    def parse(self, path_fullname: str = None, size: int = -1) -> None:
+    def get_datetime(self) -> str:
+
+        if len(self._datetime) == 0:
+            return '--------'
+        else:
+            return self._datetime
+
+
+    def get_owner(self) -> str:
+
+        return self._owner
+
+
+    def get_group(self) -> str:
+
+        return self._group
+
+
+    def get_permission(self) -> str:
+
+        if len(self._permission) == 0:
+            return '--- --- ---'
+        else:
+            return self._permission
+
+
+    def parse(self, path_fullname: str = None, size: int = -1, date_time: str = '', owner: str = '', group: str = '', permission: str = '') -> None:
+
+        self._path = ''
+        self._basename = ''
+        self._extname = ''
+        self._size = 0
+        self._datetime = date_time
+        self._owner = owner
+        self._group = group
+        self._permission = permission
 
         if path_fullname is not None:
             ext_pos = path_fullname.rfind('.')
@@ -72,12 +126,16 @@ class File:
 
 class Directory:
 
-    def __init__(self, path_fullname: str = None):
+    def __init__(self, path_fullname: str = None, date_time: str = '', owner: str = '', group: str = '', permission: str = ''):
 
         self._basename = ''
         self._path = ''
+        self._datetime = date_time
+        self._owner = owner
+        self._group = group
+        self._permission = permission
 
-        self.parse(path_fullname)
+        self.parse(path_fullname, date_time, owner, group, permission)
 
 
     def get_basename(self) -> str:
@@ -98,7 +156,40 @@ class Directory:
             return self._path + self._basename + '/'
 
 
-    def parse(self, path_fullname: str = None) -> None:
+    def get_datetime(self) -> str:
+
+        if len(self._datetime) == 0:
+            return '--------'
+        else:
+            return self._datetime
+
+
+    def get_owner(self) -> str:
+
+        return self._owner
+
+
+    def get_group(self) -> str:
+
+        return self._group
+
+
+    def get_permission(self) -> str:
+
+        if len(self._permission) == 0:
+            return '--- --- ---'
+        else:
+            return self._permission
+
+
+    def parse(self, path_fullname: str = None, date_time: str = '', owner: str = '', group: str = '', permission: str = '') -> None:
+
+        self._basename = ''
+        self._path = ''
+        self._datetime = date_time
+        self._owner = owner
+        self._group = group
+        self._permission = permission
 
         if path_fullname is not None:
             if path_fullname == '/':
