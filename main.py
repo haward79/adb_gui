@@ -1,11 +1,21 @@
 
+"""
+    TODO
+    adb push/pull check path exist
+"""
+
+import os
 import sys
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt, QCoreApplication, QUrl
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QAction, QDesktopServices
 from PyQt6.QtWidgets import QSizePolicy, QSpacerItem, QApplication, QMessageBox, QMainWindow, QScrollArea, QWidget, QMenuBar, QLabel, QPushButton, QGridLayout, QVBoxLayout, QHBoxLayout
 from filesystem import *
-from adb import device_list, Adb
+from adb import is_server_startup, device_list, Adb
 from log import *
+
+
+DEFAULT_PATH = '/storage/'
+PREVIEW_PATH = os.getcwd() + '/preview'
 
 
 def load_image(filename: str) -> QPixmap:
@@ -115,6 +125,16 @@ class AdbGui(QMainWindow):
         self.setWindowTitle("Graphical User Interface for Adb")
         self.setWindowIcon(QIcon('images/icon.png'))
 
+        if not is_server_startup():
+            msg = QMessageBox()
+            msg.setWindowTitle('Adb server not startup')
+            msg.setIcon(QMessageBox.Icon.Critical)
+            msg.setText('Adb server is NOT startup. Please start it manually.\nYou can run \"adb start-server\" in terminal to start it.')
+
+            msg.exec()
+
+            QCoreApplication.exit()
+
         self.load_devices()
 
 
@@ -161,6 +181,9 @@ class AdbGui(QMainWindow):
             self.device_id = device_id
             self.device_path = '/'
 
+            if self.adbc.is_path_exists(DEFAULT_PATH):
+                self.device_path = DEFAULT_PATH
+
             for item in self.device_items:
                 if item.text() == self.device_id:
                     item.setIcon(QIcon('images/checked.png'))
@@ -202,8 +225,17 @@ class AdbGui(QMainWindow):
 
             for c in content:
                 if type(c) is File:
+                    icon_path = 'images/file.png'
+
+                    if c.get_fullname().lower().endswith('.jpg'):
+                        self.adbc.pull(c.get_path_fullname(), PREVIEW_PATH)
+                        icon_path = PREVIEW_PATH
+
                     descript = 'File | ' + readable_size(c.get_size()) + ' | ' + c.get_datetime()
-                    generate_item(index, 'images/file.png', c.get_fullname(), False, descript, self.access_directory, gridLayout_remoteSection)
+                    generate_item(index, icon_path, c.get_fullname(), False, descript, self.access_directory, gridLayout_remoteSection)
+
+                    if icon_path == PREVIEW_PATH:
+                        os.remove(PREVIEW_PATH)
                 else:
                     descript = 'Directory' + ' | ' + c.get_datetime()
                     generate_item(index, 'images/directory.png', c.get_basename(), True, descript, self.access_directory, gridLayout_remoteSection)
