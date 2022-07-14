@@ -1,21 +1,28 @@
 
 """
     TODO
-    adb push/pull check path exist
+    adb push/pull check path exist and do for file and directory(recursive)
 """
 
 import os
+import subprocess
 import sys
+from datetime import datetime
 from PyQt6.QtCore import Qt, QCoreApplication, QUrl
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QAction, QDesktopServices
-from PyQt6.QtWidgets import QSizePolicy, QSpacerItem, QApplication, QMessageBox, QMainWindow, QScrollArea, QWidget, QMenuBar, QLabel, QPushButton, QGridLayout, QVBoxLayout, QHBoxLayout
+from PyQt6.QtWidgets import QSizePolicy, QSpacerItem, QApplication, QMainWindow, QScrollArea, QWidget, QMenuBar, QLabel, QPushButton, QGridLayout, QVBoxLayout, QHBoxLayout
 from filesystem import *
 from adb import is_server_startup, device_list, Adb
 from log import *
 
 
-DEFAULT_PATH = '/storage/'
+DEFAULT_REMOTE_PATH = '/storage/self/primary/'
 PREVIEW_PATH = os.getcwd() + '/preview'
+IMAGE_EXTENSION_NAME = ('.jpg', '.png', '.ico', '.svg')
+
+
+if not DEFAULT_REMOTE_PATH.endswith('/'):
+    DEFAULT_REMOTE_PATH += '/'
 
 
 def load_image(filename: str) -> QPixmap:
@@ -36,25 +43,33 @@ def load_image(filename: str) -> QPixmap:
     return q_pixmap
 
 
-def generate_item(index: str, icon_filename: str, name: str, is_dir: bool, descript: str, callback, parent) -> None:
+def generate_item(index: int, icon_filename: str, name: str, is_dir: bool, descript: str, callback, parent) -> None:
 
     icon = QLabel()
     filename = QLabel()
     description = QLabel()
-    access = QPushButton('>')
+    access = QPushButton()
 
     icon.setPixmap(load_image(icon_filename))
     filename.setStyleSheet('letter-spacing:0.5px;')
     description.setStyleSheet('color:#7A7A7A; letter-spacing:0.5px;')
     access.setFixedWidth(30)
     access.setFixedHeight(30)
-    access.clicked.connect(callback)
 
     filename.setText(name)
     description.setText(descript)
-    access.setProperty('dir_name', name)
 
     if is_dir:
+        access.setText('>')
+        access.clicked.connect(callback)
+        access.setProperty('type', 'directory')
+        access.setProperty('dir_name', name)
+        parent.addWidget(access, index, 2, 2, 1, Qt.AlignmentFlag.AlignRight and Qt.AlignmentFlag.AlignHCenter)
+    else:
+        access.setText('=')
+        access.clicked.connect(callback)
+        access.setProperty('type', 'file')
+        access.setProperty('filename', name)
         parent.addWidget(access, index, 2, 2, 1, Qt.AlignmentFlag.AlignRight and Qt.AlignmentFlag.AlignHCenter)
 
     parent.addWidget(icon, index, 0, 2, 1, Qt.AlignmentFlag.AlignLeft and Qt.AlignmentFlag.AlignHCenter)
@@ -73,6 +88,13 @@ class AdbGui(QMainWindow):
         self.device_id = ''
         self.device_path = ''
         self.adbc = Adb()
+        self.local_path = os.path.expanduser('~')
+
+        if not self.local_path.endswith('/'):
+            self.local_path += '/'
+
+        if os.path.isdir(self.local_path + 'Desktop'):
+            self.local_path += 'Desktop/'
 
         self.menubar = QMenuBar()
         self.menuItem_operation = self.menubar.addMenu('Operation')
@@ -80,12 +102,17 @@ class AdbGui(QMainWindow):
         self.menuItem_help = self.menubar.addMenu('Help')
 
         self.menuItem_operation.addAction('Reload device list', self.load_devices)
+        self.menuItem_operation.addAction('Reload device file explorer', self.load_remote)
+        self.menuItem_operation.addAction('Reload local file explorer', self.load_local)
 
         self.menuItem_help.addAction('Get online document', self.visit_website)
         self.menuItem_help.addAction('About', self.show_about)
 
         self.label_remoteLocation = QLabel('Remote: ')
+        self.label_remoteLocation.setAlignment(Qt.AlignmentFlag.AlignBottom)
+
         self.label_localLocation = QLabel('Local: ')
+        self.label_localLocation.setAlignment(Qt.AlignmentFlag.AlignBottom)
 
         self.hlayout_locationSection = QHBoxLayout()
         self.hlayout_locationSection.setContentsMargins(10, 10, 10, 0)
@@ -122,20 +149,20 @@ class AdbGui(QMainWindow):
         self.setCentralWidget(self.widget_mainSection)
         self.setMinimumWidth(900)
         self.setMinimumHeight(500)
-        self.setWindowTitle("Graphical User Interface for Adb")
+        self.setWindowTitle("Adb GUI")
         self.setWindowIcon(QIcon('images/icon.png'))
 
         if not is_server_startup():
-            msg = QMessageBox()
-            msg.setWindowTitle('Adb server not startup')
-            msg.setIcon(QMessageBox.Icon.Critical)
-            msg.setText('Adb server is NOT startup. Please start it manually.\nYou can run \"adb start-server\" in terminal to start it.')
-
-            msg.exec()
+            show_message(
+                'Adb server is NOT startup. Please start it manually.\nYou can run \"adb start-server\" in terminal to start it.',
+                'Adb server not startup',
+                LogType.ERROR
+            )
 
             QCoreApplication.exit()
 
         self.load_devices()
+        self.load_local()
 
 
     def load_devices(self) -> None:
@@ -181,8 +208,8 @@ class AdbGui(QMainWindow):
             self.device_id = device_id
             self.device_path = '/'
 
-            if self.adbc.is_path_exists(DEFAULT_PATH):
-                self.device_path = DEFAULT_PATH
+            if self.adbc.is_path_exists(DEFAULT_REMOTE_PATH):
+                self.device_path = DEFAULT_REMOTE_PATH
 
             for item in self.device_items:
                 if item.text() == self.device_id:
@@ -193,17 +220,19 @@ class AdbGui(QMainWindow):
             self.load_remote()
 
         else:
-            msg = QMessageBox()
-            msg.setWindowTitle('Failed to connect to device')
-            msg.setIcon(QMessageBox.Icon.Critical)
-            msg.setText('Failed to connect to device: ' + device_id + '.\nPlease reload device list or reconnect device by adb command.')
-
-            msg.exec()
+            show_message(
+                'Failed to connect to device: ' + device_id + '.\nPlease reload device list or reconnect device by adb command.',
+                'Failed to connect to device',
+                LogType.ERROR
+            )
 
 
     def load_remote(self):
 
-        self.label_remoteLocation.setText('Remote: ' + self.device_path)
+        if len(self.device_id) == 0:
+            self.label_remoteLocation.setText('Remote: ' + self.device_path)
+        else:
+            self.label_remoteLocation.setText('Connected to ' + self.device_id + '\n\nRemote: ' + self.device_path)
 
         gridLayout_remoteSection = QGridLayout()
         widget_remoteSection = QWidget()
@@ -220,25 +249,31 @@ class AdbGui(QMainWindow):
             index = 0
             content = self.adbc.get_directory_struct(self.device_path).get_content()
 
-            generate_item(index, 'images/back.png', '..', True, 'Back to parent directory', self.access_directory, gridLayout_remoteSection)
+            generate_item(index, 'images/back.png', '..', True, 'Back to parent directory', self.access_remote_directory, gridLayout_remoteSection)
             index += 2
 
             for c in content:
                 if type(c) is File:
                     icon_path = 'images/file.png'
 
-                    if c.get_fullname().lower().endswith('.jpg'):
-                        self.adbc.pull(c.get_path_fullname(), PREVIEW_PATH)
-                        icon_path = PREVIEW_PATH
+                    for extname in IMAGE_EXTENSION_NAME:
+                        if c.get_fullname().lower().endswith(extname.lower()):
+                            if self.adbc.pull(c.get_path_fullname(), PREVIEW_PATH):
+                                icon_path = PREVIEW_PATH
+                            else:
+                                log('Failed to pull file for preview: ' + c.get_path_fullname(), LogType.ERROR)
+
+                            break
 
                     descript = 'File | ' + readable_size(c.get_size()) + ' | ' + c.get_datetime()
-                    generate_item(index, icon_path, c.get_fullname(), False, descript, self.access_directory, gridLayout_remoteSection)
+                    generate_item(index, icon_path, c.get_fullname(), False, descript, self.access_remote_directory, gridLayout_remoteSection)
 
                     if icon_path == PREVIEW_PATH:
                         os.remove(PREVIEW_PATH)
                 else:
-                    descript = 'Directory' + ' | ' + c.get_datetime()
-                    generate_item(index, 'images/directory.png', c.get_basename(), True, descript, self.access_directory, gridLayout_remoteSection)
+                    items_count = len(self.adbc.get_directory_struct(c.get_path_dirname()).get_content())
+                    descript = 'Directory | ' + str(items_count) + ' items | ' + c.get_datetime()
+                    generate_item(index, 'images/directory.png', c.get_basename(), True, descript, self.access_remote_directory, gridLayout_remoteSection)
 
                 index += 2
 
@@ -250,22 +285,136 @@ class AdbGui(QMainWindow):
 
     def load_local(self):
 
-        self.label_localLocation.setText('Local: ')
+        self.label_localLocation.setText('Local: ' + self.local_path)
+
+        gridLayout_localSection = QGridLayout()
+        widget_localSection = QWidget()
+
+        gridLayout_localSection.setSpacing(10)
+        gridLayout_localSection.setColumnStretch(0, 1)
+        gridLayout_localSection.setColumnStretch(1, 10)
+        gridLayout_localSection.setColumnStretch(2, 1)
+
+        index = 0
+        content = os.listdir(self.local_path)
+
+        generate_item(index, 'images/back.png', '..', True, 'Back to parent directory', self.access_local_directory, gridLayout_localSection)
+        index += 2
+
+        for c in content:
+            path_filename = self.local_path + c
+
+            if os.path.isfile(path_filename):
+                icon_path = 'images/file.png'
+
+                for extname in IMAGE_EXTENSION_NAME:
+                    if c.lower().endswith(extname.lower()):
+                        cmd = 'cp' + ' \'' + path_filename + '\'' + ' \'' + PREVIEW_PATH + '\''
+                        process = subprocess.Popen(args=cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        stdout, stderr = process.communicate()
+
+                        stdout = stdout.decode('utf-8')
+                        stderr = stderr.decode('utf-8')
+
+                        if len(stderr) == 0:
+                            icon_path = PREVIEW_PATH
+                        else:
+                            log('Failed to copy file for preview: ' + c.get_path_fullname(), LogType.ERROR)
+
+                        break
+
+                file_size = readable_size(os.path.getsize(path_filename))
+                file_modified = datetime.fromtimestamp(os.path.getmtime(path_filename)).strftime('%Y.%m.%d %H:%M:%S')
+                descript = 'File | ' + file_size + ' | ' + file_modified
+                generate_item(index, icon_path, c, False, descript, self.access_local_directory, gridLayout_localSection)
+
+                if icon_path == PREVIEW_PATH:
+                    os.remove(PREVIEW_PATH)
+
+            elif os.path.isdir(path_filename):
+                items_count = len(os.listdir(path_filename))
+                file_modified = datetime.fromtimestamp(os.path.getmtime(path_filename)).strftime('%Y.%m.%d %H:%M:%S')
+                descript = 'Directory | ' + str(items_count) + ' items | ' + file_modified
+                generate_item(index, 'images/directory.png', c, True, descript, self.access_local_directory, gridLayout_localSection)
+
+            index += 2
+
+        gridLayout_localSection.addItem(QSpacerItem(10, 10, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding), index, 0, 1, 3)
+
+        widget_localSection.setLayout(gridLayout_localSection)
+        self.scrollArea_local.setWidget(widget_localSection)
 
 
-    def access_directory(self):
+    def access_remote_directory(self):
 
-        dir_name = self.sender().property('dir_name')
+        event_sender_type = self.sender().property('type')
 
-        if dir_name == '..':
-            if self.device_path != '/':
-                self.device_path = self.device_path[0:-1]
-                pos = self.device_path.rfind('/')
-                self.device_path = self.device_path[0:pos+1]
+        if event_sender_type == 'directory':
+            dir_name = self.sender().property('dir_name')
+
+            if dir_name == '..':
+                if self.device_path != '/':
+                    self.device_path = self.device_path[0:-1]
+                    pos = self.device_path.rfind('/')
+                    self.device_path = self.device_path[0:pos + 1]
+            else:
+                self.device_path += dir_name + '/'
+
+            self.load_remote()
+
         else:
-            self.device_path += dir_name + '/'
+            filename = self.sender().property('filename')
 
-        self.load_remote()
+            if self.adbc.pull(self.device_path + filename, self.local_path + filename):
+                self.load_local()
+            else:
+                self.load_remote()
+
+                log_msg = 'Failed to pull file from device "' + (self.device_path + filename) + '" to local "' + (self.local_path + filename) + '"'
+
+                log(log_msg, LogType.ERROR)
+
+                show_message(
+                    log_msg,
+                    'Failed to pull from device',
+                    LogType.ERROR
+                )
+
+
+    def access_local_directory(self):
+
+        event_sender_type = self.sender().property('type')
+
+        if event_sender_type == 'directory':
+            dir_name = self.sender().property('dir_name')
+
+            if dir_name == '..':
+                if self.local_path != '/':
+                    self.local_path = self.local_path[0:-1]
+                    pos = self.local_path.rfind('/')
+                    self.local_path = self.local_path[0:pos+1]
+            else:
+                self.local_path += dir_name + '/'
+
+            self.load_local()
+
+        else:
+            filename = self.sender().property('filename')
+
+            if self.adbc.push(self.local_path + filename, self.device_path + filename):
+                self.load_remote()
+            else:
+                self.load_local()
+
+                log_msg = 'Failed to push file from local, "' + (self.local_path + filename) + '" to device, "' + (self.device_path + filename) + '"'
+
+                log(log_msg, LogType.ERROR)
+
+                show_message(
+                    log_msg,
+                    'Failed to push to device',
+                    LogType.ERROR
+                )
 
 
     def visit_website(self):
@@ -275,12 +424,11 @@ class AdbGui(QMainWindow):
 
     def show_about(self):
 
-        msg = QMessageBox()
-        msg.setWindowTitle('About this program')
-        msg.setIcon(QMessageBox.Icon.Information)
-        msg.setText('Adb GUI is a GUI wrapper for adb.\n\nCurrent version is v1.0.0')
-
-        msg.exec()
+        show_message(
+            'Adb GUI is a GUI wrapper for adb.\n\nCurrent version is v1.0.0',
+            'About this program',
+            LogType.INFO
+        )
 
 
 app = QApplication(sys.argv)

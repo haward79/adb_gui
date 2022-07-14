@@ -36,6 +36,14 @@ def device_list() -> list:
     return devices_list
 
 
+def handle_deviceNotSpecify() -> None:
+
+    log_msg = 'Unable to do the request due to no device is connected.\nPlease select a device from device item in menu bar.'
+
+    log(log_msg, LogType.ERROR)
+    show_message(log_msg, 'Device not connected', LogType.ERROR)
+
+
 class Adb:
 
     def __init__(self, device_id: str = None):
@@ -58,9 +66,15 @@ class Adb:
 
     def is_path_exists(self, path: str) -> bool:
 
-        resp = self._device.shell('ls -l \'' + path + '\'')
+        if self._device is not None:
+            resp = self._device.shell('ls -l \'' + path + '\'')
 
-        return resp.lower().find('no such file or directory') == -1
+            return resp.lower().find('no such file or directory') == -1
+
+        else:
+            handle_deviceNotSpecify()
+
+            return False
 
 
     def get_directory_struct(self, path_filename: str) -> DirectoryStruct:
@@ -71,7 +85,7 @@ class Adb:
         path_filename = ds.get_path_dirname()
 
         if self._device is not None:
-            resp = self._device.shell('ls -l \'' + path_filename + '\'')
+            resp = self._device.shell('ls -l -L \'' + path_filename + '\'')
 
             if resp.lower().find('no such file or directory') != -1:
                 log('No such path: ' + path_filename, LogType.ERROR)
@@ -93,6 +107,7 @@ class Adb:
                                 size = parts[4]
                                 date_time = ' '.join([parts[5], parts[6]]).replace('-', '.')
                                 filename = ''.join(parts[7:]).replace('\\', ' ')
+                                link = ''
 
                                 if size.find('?') == -1:
                                     size = int(size)
@@ -101,6 +116,7 @@ class Adb:
 
                                 pos = filename.find('->')
                                 if pos != -1:
+                                    link = filename[pos+2:]
                                     filename = filename[:pos]
 
                                 if permission.find('?') == -1:
@@ -115,33 +131,34 @@ class Adb:
                                         ds.append_content(file)
 
         else:
-            raise DeviceNotSpecify
+            handle_deviceNotSpecify()
 
         return ds
 
 
     def pull(self, source: str, dest: str) -> bool:
 
-        if self.is_path_exists(source):
-            self._device.pull(source, dest)
+        if self._device is not None:
+            if self.is_path_exists(source):
+                self._device.pull(source, dest)
 
-            return True
+                return True
 
-        return False
+            return False
+
+        else:
+            handle_deviceNotSpecify()
 
 
     def push(self, source: str, dest: str) -> bool:
 
-        if path.isfile(source):
-            self._device.push(source, dest)
+        if self._device is not None:
+            if path.isfile(source):
+                self._device.push(source, dest)
 
-            return True
+                return True
 
-        return False
+            return False
 
-
-class DeviceNotSpecify(Exception):
-
-    def __init__(self, message: str = 'Device NOT connected. Please run connect() first!'):
-
-        pass
+        else:
+            handle_deviceNotSpecify()
