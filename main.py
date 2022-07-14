@@ -4,6 +4,16 @@
     adb push/pull check path exist and do for file and directory(recursive)
 """
 
+pos = __file__.rfind('/')
+
+if pos != -1:
+    RESOURCE_PATH = __file__[:pos] + '/'
+else:
+    RESOURCE_PATH = ''
+
+print(RESOURCE_PATH)
+
+
 import os
 import subprocess
 import sys
@@ -150,7 +160,7 @@ class AdbGui(QMainWindow):
         self.setMinimumWidth(900)
         self.setMinimumHeight(500)
         self.setWindowTitle("Adb GUI")
-        self.setWindowIcon(QIcon('images/icon.png'))
+        self.setWindowIcon(QIcon(RESOURCE_PATH + 'images/icon.png'))
 
         if not is_server_startup():
             show_message(
@@ -213,7 +223,7 @@ class AdbGui(QMainWindow):
 
             for item in self.device_items:
                 if item.text() == self.device_id:
-                    item.setIcon(QIcon('images/checked.png'))
+                    item.setIcon(QIcon(RESOURCE_PATH + 'images/checked.png'))
                 else:
                     item.setIcon(QIcon())
 
@@ -249,12 +259,12 @@ class AdbGui(QMainWindow):
             index = 0
             content = self.adbc.get_directory_struct(self.device_path).get_content()
 
-            generate_item(index, 'images/back.png', '..', True, 'Back to parent directory', self.access_remote_directory, gridLayout_remoteSection)
+            generate_item(index, RESOURCE_PATH + 'images/back.png', '..', True, 'Back to parent directory', self.access_remote_directory, gridLayout_remoteSection)
             index += 2
 
             for c in content:
                 if type(c) is File:
-                    icon_path = 'images/file.png'
+                    icon_path = RESOURCE_PATH + 'images/file.png'
 
                     for extname in IMAGE_EXTENSION_NAME:
                         if c.get_fullname().lower().endswith(extname.lower()):
@@ -273,7 +283,7 @@ class AdbGui(QMainWindow):
                 else:
                     items_count = len(self.adbc.get_directory_struct(c.get_path_dirname()).get_content())
                     descript = 'Directory | ' + str(items_count) + ' items | ' + c.get_datetime()
-                    generate_item(index, 'images/directory.png', c.get_basename(), True, descript, self.access_remote_directory, gridLayout_remoteSection)
+                    generate_item(index, RESOURCE_PATH + 'images/directory.png', c.get_basename(), True, descript, self.access_remote_directory, gridLayout_remoteSection)
 
                 index += 2
 
@@ -298,14 +308,14 @@ class AdbGui(QMainWindow):
         index = 0
         content = os.listdir(self.local_path)
 
-        generate_item(index, 'images/back.png', '..', True, 'Back to parent directory', self.access_local_directory, gridLayout_localSection)
+        generate_item(index, RESOURCE_PATH + 'images/back.png', '..', True, 'Back to parent directory', self.access_local_directory, gridLayout_localSection)
         index += 2
 
         for c in content:
             path_filename = self.local_path + c
 
             if os.path.isfile(path_filename):
-                icon_path = 'images/file.png'
+                icon_path = RESOURCE_PATH + 'images/file.png'
 
                 for extname in IMAGE_EXTENSION_NAME:
                     if c.lower().endswith(extname.lower()):
@@ -335,7 +345,7 @@ class AdbGui(QMainWindow):
                 items_count = len(os.listdir(path_filename))
                 file_modified = datetime.fromtimestamp(os.path.getmtime(path_filename)).strftime('%Y.%m.%d %H:%M:%S')
                 descript = 'Directory | ' + str(items_count) + ' items | ' + file_modified
-                generate_item(index, 'images/directory.png', c, True, descript, self.access_local_directory, gridLayout_localSection)
+                generate_item(index, RESOURCE_PATH + 'images/directory.png', c, True, descript, self.access_local_directory, gridLayout_localSection)
 
             index += 2
 
