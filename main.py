@@ -17,6 +17,7 @@ print(RESOURCE_PATH)
 import os
 import subprocess
 import sys
+import cv2
 from datetime import datetime
 from PyQt6.QtCore import Qt, QCoreApplication, QUrl
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QAction, QDesktopServices
@@ -28,39 +29,91 @@ from log import *
 
 DEFAULT_REMOTE_PATH = '/storage/self/primary/'
 PREVIEW_PATH = os.getcwd() + '/preview'
-IMAGE_EXTENSION_NAME = ('.jpg', '.png', '.ico', '.svg')
+IMAGE_EXTENSION_NAME = ('.jpg', '.jpeg', '.png', '.ico', '.svg')
+VIDEO_EXTENSION_NAME = ('.mp4', '.avi', '.webm')
+IMAGE_MAX_HEIGHT = 80
+IMAGE_MAX_WIDTH = 150
 
 
 if not DEFAULT_REMOTE_PATH.endswith('/'):
     DEFAULT_REMOTE_PATH += '/'
 
 
-def load_image(filename: str) -> QPixmap:
+def create_video_thumbnail(icon_filename: str, original_filename: str = None) -> QPixmap:
 
-    q_pixmap = None
+    if original_filename is None:
+        original_filename = icon_filename
 
-    try:
-        q_image = QImage(filename)
-        q_image = q_image.scaledToHeight(80, Qt.TransformationMode.SmoothTransformation)
+    cap = cv2.VideoCapture(icon_filename)
+    frame_id = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) // 2
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
 
-        q_pixmap = QPixmap.fromImage(q_image)
+    status, frame = cap.read()
 
-    except Exception as e:
-        log('Failed to load image: ' + filename, LogType.ERROR)
+    if status:
+        frame = cv2.resize(frame, (int(frame.shape[1] * (IMAGE_MAX_HEIGHT / frame.shape[0])), IMAGE_MAX_HEIGHT))
+
+        if frame.shape[1] > IMAGE_MAX_WIDTH:
+            left_boundary = (frame.shape[1] - IMAGE_MAX_WIDTH) // 2
+            frame = frame[:, left_boundary:left_boundary+IMAGE_MAX_WIDTH]
+
+        h, w, c = frame.shape
+
+        return QPixmap(QImage(frame, w, h, 3 * w, QImage.Format.Format_RGB888))
+    else:
+        log('Failed to create thumbnail for video: ' + original_filename, LogType.ERROR)
 
         return None
 
-    return q_pixmap
+
+def create_image_thumbnail(icon_filename: str, original_filename: str = None) -> QPixmap:
+
+    if original_filename is None:
+        original_filename = icon_filename
+
+    try:
+        q_image = QImage(icon_filename)
+        q_image = q_image.scaledToHeight(IMAGE_MAX_HEIGHT, Qt.TransformationMode.SmoothTransformation)
+
+        if q_image.width() > IMAGE_MAX_WIDTH:
+            q_image = q_image.copy((q_image.width()-IMAGE_MAX_WIDTH)//2, 0, IMAGE_MAX_WIDTH, q_image.height())
+
+        return QPixmap.fromImage(q_image)
+
+    except Exception as e:
+        log('Failed to create thumbnail for image: ' + original_filename, LogType.ERROR)
+
+        return None
 
 
-def generate_item(index: int, icon_filename: str, name: str, is_dir: bool, descript: str, callback, parent) -> None:
+def remove_thumbnail():
+
+    if os.path.isfile(PREVIEW_PATH):
+        os.remove(PREVIEW_PATH)
+
+
+def local_copy(source: str, dest: str) -> bool:
+
+    if os.path.isfile(source):
+        cmd = 'cp' + ' \'' + source + '\'' + ' \'' + dest + '\''
+        process = subprocess.Popen(args=cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+
+        stdout = stdout.decode('utf-8')
+        stderr = stderr.decode('utf-8')
+
+        return len(stderr) == 0
+
+    return False
+
+
+def generate_item(index: int, icon_image: QPixmap, name: str, is_dir: bool, descript: str, callback, parent) -> None:
 
     icon = QLabel()
     filename = QLabel()
     description = QLabel()
     access = QPushButton()
 
-    icon.setPixmap(load_image(icon_filename))
     filename.setStyleSheet('letter-spacing:0.5px;')
     description.setStyleSheet('color:#7A7A7A; letter-spacing:0.5px;')
     access.setFixedWidth(30)
@@ -69,13 +122,22 @@ def generate_item(index: int, icon_filename: str, name: str, is_dir: bool, descr
     filename.setText(name)
     description.setText(descript)
 
+    if icon_image is not None:
+        icon.setPixmap(icon_image)
+
     if is_dir:
+        if icon_image is None:
+            icon.setPixmap(create_image_thumbnail(RESOURCE_PATH + 'images/directory.png'))
+
         access.setText('>')
         access.clicked.connect(callback)
         access.setProperty('type', 'directory')
         access.setProperty('dir_name', name)
         parent.addWidget(access, index, 2, 2, 1, Qt.AlignmentFlag.AlignRight and Qt.AlignmentFlag.AlignHCenter)
     else:
+        if icon_image is None:
+            icon.setPixmap(create_image_thumbnail(RESOURCE_PATH + 'images/file.png'))
+
         access.setText('=')
         access.clicked.connect(callback)
         access.setProperty('type', 'file')
@@ -259,31 +321,41 @@ class AdbGui(QMainWindow):
             index = 0
             content = self.adbc.get_directory_struct(self.device_path).get_content()
 
-            generate_item(index, RESOURCE_PATH + 'images/back.png', '..', True, 'Back to parent directory', self.access_remote_directory, gridLayout_remoteSection)
+            generate_item(index, create_image_thumbnail(RESOURCE_PATH + 'images/back.png'), '..', True, 'Back to parent directory', self.access_remote_directory, gridLayout_remoteSection)
             index += 2
 
             for c in content:
                 if type(c) is File:
-                    icon_path = RESOURCE_PATH + 'images/file.png'
+                    thumbnail = None
 
+                    # Create thumbnail for image.
                     for extname in IMAGE_EXTENSION_NAME:
                         if c.get_fullname().lower().endswith(extname.lower()):
                             if self.adbc.pull(c.get_path_fullname(), PREVIEW_PATH):
-                                icon_path = PREVIEW_PATH
+                                thumbnail = create_image_thumbnail(PREVIEW_PATH, c.get_path_fullname())
+                            else:
+                                log('Failed to pull file for preview: ' + c.get_path_fullname(), LogType.ERROR)
+
+                            break
+
+                    # Create thumbnail for video.
+                    for extname in VIDEO_EXTENSION_NAME:
+                        if c.get_fullname().lower().endswith(extname.lower()):
+                            if self.adbc.pull(c.get_path_fullname(), PREVIEW_PATH):
+                                thumbnail = create_video_thumbnail(PREVIEW_PATH, c.get_path_fullname())
                             else:
                                 log('Failed to pull file for preview: ' + c.get_path_fullname(), LogType.ERROR)
 
                             break
 
                     descript = 'File | ' + readable_size(c.get_size()) + ' | ' + c.get_datetime()
-                    generate_item(index, icon_path, c.get_fullname(), False, descript, self.access_remote_directory, gridLayout_remoteSection)
+                    generate_item(index, thumbnail, c.get_fullname(), False, descript, self.access_remote_directory, gridLayout_remoteSection)
 
-                    if icon_path == PREVIEW_PATH:
-                        os.remove(PREVIEW_PATH)
+                    remove_thumbnail()
                 else:
                     items_count = len(self.adbc.get_directory_struct(c.get_path_dirname()).get_content())
                     descript = 'Directory | ' + str(items_count) + ' items | ' + c.get_datetime()
-                    generate_item(index, RESOURCE_PATH + 'images/directory.png', c.get_basename(), True, descript, self.access_remote_directory, gridLayout_remoteSection)
+                    generate_item(index, None, c.get_basename(), True, descript, self.access_remote_directory, gridLayout_remoteSection)
 
                 index += 2
 
@@ -306,46 +378,53 @@ class AdbGui(QMainWindow):
         gridLayout_localSection.setColumnStretch(2, 1)
 
         index = 0
-        content = os.listdir(self.local_path)
 
-        generate_item(index, RESOURCE_PATH + 'images/back.png', '..', True, 'Back to parent directory', self.access_local_directory, gridLayout_localSection)
+        try:
+            content = os.listdir(self.local_path)
+        except PermissionError:
+            content = []
+            log('Failed to list directory: "' + self.local_path + '" due to permission error.', LogType.ERROR)
+
+        generate_item(index, create_image_thumbnail(RESOURCE_PATH + 'images/back.png'), '..', True, 'Back to parent directory', self.access_local_directory, gridLayout_localSection)
         index += 2
 
         for c in content:
             path_filename = self.local_path + c
 
             if os.path.isfile(path_filename):
-                icon_path = RESOURCE_PATH + 'images/file.png'
+                thumbnail = None
 
+                # Create thumbnail for image.
                 for extname in IMAGE_EXTENSION_NAME:
                     if c.lower().endswith(extname.lower()):
-                        cmd = 'cp' + ' \'' + path_filename + '\'' + ' \'' + PREVIEW_PATH + '\''
-                        process = subprocess.Popen(args=cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                        stdout, stderr = process.communicate()
+                        thumbnail = create_image_thumbnail(path_filename)
 
-                        stdout = stdout.decode('utf-8')
-                        stderr = stderr.decode('utf-8')
+                        break
 
-                        if len(stderr) == 0:
-                            icon_path = PREVIEW_PATH
-                        else:
-                            log('Failed to copy file for preview: ' + c.get_path_fullname(), LogType.ERROR)
+                # Create thumbnail for video.
+                for extname in VIDEO_EXTENSION_NAME:
+                    if c.lower().endswith(extname.lower()):
+                        thumbnail = create_video_thumbnail(path_filename)
 
                         break
 
                 file_size = readable_size(os.path.getsize(path_filename))
                 file_modified = datetime.fromtimestamp(os.path.getmtime(path_filename)).strftime('%Y.%m.%d %H:%M:%S')
                 descript = 'File | ' + file_size + ' | ' + file_modified
-                generate_item(index, icon_path, c, False, descript, self.access_local_directory, gridLayout_localSection)
+                generate_item(index, thumbnail, c, False, descript, self.access_local_directory, gridLayout_localSection)
 
-                if icon_path == PREVIEW_PATH:
-                    os.remove(PREVIEW_PATH)
+                remove_thumbnail()
 
             elif os.path.isdir(path_filename):
-                items_count = len(os.listdir(path_filename))
+                try:
+                    items_count = len(os.listdir(path_filename))
+                except PermissionError:
+                    items_count = 0
+                    log('Failed to list directory: "' + path_filename + '" due to permission error.', LogType.ERROR)
+
                 file_modified = datetime.fromtimestamp(os.path.getmtime(path_filename)).strftime('%Y.%m.%d %H:%M:%S')
                 descript = 'Directory | ' + str(items_count) + ' items | ' + file_modified
-                generate_item(index, RESOURCE_PATH + 'images/directory.png', c, True, descript, self.access_local_directory, gridLayout_localSection)
+                generate_item(index, None, c, True, descript, self.access_local_directory, gridLayout_localSection)
 
             index += 2
 
