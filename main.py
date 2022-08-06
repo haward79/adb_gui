@@ -19,14 +19,16 @@ import subprocess
 import sys
 import cv2
 from datetime import datetime
-from PyQt6.QtCore import Qt, QCoreApplication, QUrl
+from time import sleep
+from PyQt6.QtCore import Qt, QCoreApplication, QObject, QThread, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QAction, QDesktopServices
-from PyQt6.QtWidgets import QSizePolicy, QSpacerItem, QApplication, QMainWindow, QScrollArea, QWidget, QMenuBar, QLabel, QPushButton, QGridLayout, QVBoxLayout, QHBoxLayout
+from PyQt6.QtWidgets import QSizePolicy, QSpacerItem, QApplication, QMainWindow, QStatusBar, QScrollArea, QWidget, QMenuBar, QLabel, QPushButton, QGridLayout, QVBoxLayout, QHBoxLayout
 from filesystem import *
 from adb import is_server_startup, device_list, Adb
 from log import *
 
 
+STATUSBAR_MESSAGE_TIMEOUT_MS = 3000
 DEFAULT_REMOTE_PATH = '/storage/self/primary/'
 PREVIEW_PATH = os.getcwd() + '/preview'
 IMAGE_EXTENSION_NAME = ('.jpg', '.jpeg', '.png', '.ico', '.svg')
@@ -149,6 +151,102 @@ def generate_item(index: int, icon_image: QPixmap, name: str, is_dir: bool, desc
     parent.addWidget(description, index + 1, 1, 1, 1, Qt.AlignmentFlag.AlignLeft and Qt.AlignmentFlag.AlignTop)
 
 
+class ScreenCastUpdate(QThread):
+
+    def __init__(self, adbc: Adb, is_running: bool, label_screenshot: QLabel, get_window_size: callable, parent = None):
+
+        super().__init__(parent)
+
+        self.adbc = adbc
+        self.is_running = is_running
+        self.label_screenshot = label_screenshot
+        self.get_window_size = get_window_size
+
+
+    def run(self):
+
+        while self.is_running:
+            image = self.adbc.screenshot()
+
+            if image is None:
+                show_message('Failed to capture screen! Please check connection.', 'Failed to capture screenshot')
+                break
+
+            else:
+                dimension = list(image.shape[1::-1])
+                window_size = self.get_window_size()
+
+                # Fit with window height.
+                if window_size[1] / dimension[1] * dimension[0] <= window_size[0]:
+                    scale_factor = window_size[1] / dimension[1]
+
+                # Fit with window width.
+                else:
+                    scale_factor = window_size[0] / dimension[0]
+
+                dimension[0] = int(dimension[0] * scale_factor)
+                dimension[1] = int(dimension[1] * scale_factor)
+
+                image = cv2.resize(image, dimension)
+
+                height, width, channel = image.shape
+                bytesPerLine = 3 * width
+                q_image = QImage(image, width, height, bytesPerLine, QImage.Format.Format_RGB888)
+
+                self.label_screenshot.setPixmap(QPixmap.fromImage(q_image))
+
+            sleep(0.001)
+
+
+class ScreenCast(QMainWindow):
+
+    def __init__(self, adbc, parent=None):
+
+        super().__init__(parent)
+
+        self.adbc = adbc
+        self.is_running = True
+
+        self.label_screenshot = QLabel('')
+        self.label_screenshot.setStyleSheet('background-color: #000000;')
+        self.label_screenshot.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.label_screenshot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.vbox_layout = QVBoxLayout()
+        self.vbox_layout.setContentsMargins(0, 0, 0, 0)
+        self.vbox_layout.setSpacing(0)
+        self.vbox_layout.addWidget(self.label_screenshot)
+
+        self.widget_mainSection = QWidget()
+        self.widget_mainSection.setLayout(self.vbox_layout)
+
+        self.setCentralWidget(self.widget_mainSection)
+        self.setMinimumWidth(300)
+        self.setMinimumHeight(300)
+        self.setWindowTitle("Android Live Cast")
+        self.setWindowIcon(QIcon(RESOURCE_PATH + 'images/icon.png'))
+
+        self.update_thread = ScreenCastUpdate(self.adbc, self.is_running, self.label_screenshot, self.get_window_size)
+
+
+    def reset(self) -> None:
+
+        self.is_running = True
+        self.label_screenshot.setPixmap(QPixmap(RESOURCE_PATH + 'images/stream_waiting.png'))
+        self.update_thread.start()
+        self.show()
+
+
+    def get_window_size(self) -> list:
+
+        return [self.width(), self.height()]
+
+
+    def closeEvent(self, event):
+
+            self.is_running = False
+
+
 class AdbGui(QMainWindow):
 
     def __init__(self, parent=None):
@@ -161,6 +259,7 @@ class AdbGui(QMainWindow):
         self.device_path = ''
         self.adbc = Adb()
         self.local_path = os.path.expanduser('~')
+        self.sc = ScreenCast(self.adbc)
 
         if not self.local_path.endswith('/'):
             self.local_path += '/'
@@ -171,14 +270,20 @@ class AdbGui(QMainWindow):
         self.menubar = QMenuBar()
         self.menuItem_operation = self.menubar.addMenu('Operation')
         self.menuItem_devices = self.menubar.addMenu('Device')
+        self.menuItem_tools = self.menubar.addMenu('Tools')
         self.menuItem_help = self.menubar.addMenu('Help')
 
         self.menuItem_operation.addAction('Reload device list', self.load_devices)
         self.menuItem_operation.addAction('Reload device file explorer', self.load_remote)
         self.menuItem_operation.addAction('Reload local file explorer', self.load_local)
 
+        self.menuItem_tools.addAction('Screen Cast', self.cast)
+
         self.menuItem_help.addAction('Get online document', self.visit_website)
         self.menuItem_help.addAction('About', self.show_about)
+
+        self.statusBar = QStatusBar()
+        self.setStatusBar(self.statusBar)
 
         self.label_remoteLocation = QLabel('Remote: ')
         self.label_remoteLocation.setAlignment(Qt.AlignmentFlag.AlignBottom)
@@ -236,8 +341,12 @@ class AdbGui(QMainWindow):
         self.load_devices()
         self.load_local()
 
+        self.statusBar.showMessage('Ready')
+
 
     def load_devices(self) -> None:
+
+        self.statusBar.showMessage('Loading device list ......')
 
         # Clear item from device menu.
         for item in self.device_items:
@@ -271,12 +380,20 @@ class AdbGui(QMainWindow):
         # Reload remote file explorer.
         self.load_remote()
 
+        self.statusBar.showMessage('Device list loaded', STATUSBAR_MESSAGE_TIMEOUT_MS)
+
 
     def select_device(self):
 
         device_id = self.sender().text()
+        self.clear()
+
+        self.statusBar.showMessage('Connecting to device: ' + device_id + ' ......')
 
         if self.adbc.connect(device_id):
+
+            self.statusBar.showMessage('Connected to device: ' + device_id)
+
             self.device_id = device_id
             self.device_path = '/'
 
@@ -292,6 +409,8 @@ class AdbGui(QMainWindow):
             self.load_remote()
 
         else:
+            self.statusBar.showMessage('Failed to load device list')
+
             show_message(
                 'Failed to connect to device: ' + device_id + '.\nPlease reload device list or reconnect device by adb command.',
                 'Failed to connect to device',
@@ -300,6 +419,8 @@ class AdbGui(QMainWindow):
 
 
     def load_remote(self):
+
+        self.statusBar.showMessage('Loading device files and directories ......')
 
         if len(self.device_id) == 0:
             self.label_remoteLocation.setText('Remote: ' + self.device_path)
@@ -364,8 +485,12 @@ class AdbGui(QMainWindow):
         widget_remoteSection.setLayout(gridLayout_remoteSection)
         self.scrollArea_remote.setWidget(widget_remoteSection)
 
+        self.statusBar.showMessage('Device files and directories loaded')
+
 
     def load_local(self):
+
+        self.statusBar.showMessage('Loading local files and directories ......')
 
         self.label_localLocation.setText('Local: ' + self.local_path)
 
@@ -433,8 +558,12 @@ class AdbGui(QMainWindow):
         widget_localSection.setLayout(gridLayout_localSection)
         self.scrollArea_local.setWidget(widget_localSection)
 
+        self.statusBar.showMessage('Local files and directories loaded')
+
 
     def access_remote_directory(self):
+
+        self.statusBar.showMessage('Accessing directory on device ......')
 
         event_sender_type = self.sender().property('type')
 
@@ -454,8 +583,12 @@ class AdbGui(QMainWindow):
         else:
             filename = self.sender().property('filename')
 
+            self.statusBar.showMessage('Pulling file from "' + (self.device_path + filename) + '" to "' + (self.local_path + filename) + '"')
+
             if self.adbc.pull(self.device_path + filename, self.local_path + filename):
                 self.load_local()
+
+                self.statusBar.showMessage('Successfully pulled a file from "' + (self.device_path + filename) + '" to "' + (self.local_path + filename) + '"')
             else:
                 self.load_remote()
 
@@ -463,14 +596,20 @@ class AdbGui(QMainWindow):
 
                 log(log_msg, LogType.ERROR)
 
+                self.statusBar.showMessage('Failed to pull a file from "' + (self.device_path + filename) + '" to "' + (self.local_path + filename) + '"')
+
                 show_message(
                     log_msg,
                     'Failed to pull from device',
                     LogType.ERROR
                 )
 
+        self.statusBar.showMessage('Directory on device is loaded')
+
 
     def access_local_directory(self):
+
+        self.statusBar.showMessage('Accessing directory on local ......')
 
         event_sender_type = self.sender().property('type')
 
@@ -490,8 +629,12 @@ class AdbGui(QMainWindow):
         else:
             filename = self.sender().property('filename')
 
+            self.statusBar.showMessage('Pushing file from "' + (self.local_path + filename) + '" to "' + (self.device_path + filename) + '"')
+
             if self.adbc.push(self.local_path + filename, self.device_path + filename):
                 self.load_remote()
+
+                self.statusBar.showMessage('Successfully pushed a file from "' + (self.local_path + filename) + '" to "' + (self.device_path + filename) + '"')
             else:
                 self.load_local()
 
@@ -499,11 +642,20 @@ class AdbGui(QMainWindow):
 
                 log(log_msg, LogType.ERROR)
 
+                self.statusBar.showMessage('Failed to push a file from "' + (self.local_path + filename) + '" to "' + (self.device_path + filename) + '"')
+
                 show_message(
                     log_msg,
                     'Failed to push to device',
                     LogType.ERROR
                 )
+
+        self.statusBar.showMessage('Directory on local is loaded')
+
+
+    def cast(self):
+
+        self.sc.reset()
 
 
     def visit_website(self):
@@ -518,6 +670,17 @@ class AdbGui(QMainWindow):
             'About this program',
             LogType.INFO
         )
+
+
+    def clear(self):
+
+        self.sc.is_running = False
+        self.sc.hide()
+
+
+    def closeEvent(self, event):
+
+        self.clear()
 
 
 app = QApplication(sys.argv)

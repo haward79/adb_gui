@@ -1,5 +1,9 @@
 
 from os import path
+import io
+import numpy as np
+import cv2
+from PIL import Image
 from ppadb.client import Client as AdbClient
 from log import *
 from filesystem import *
@@ -159,6 +163,20 @@ class Adb:
                 return True
 
             return False
+
+        else:
+            handle_deviceNotSpecify()
+
+
+    def screenshot(self) -> np.ndarray:
+
+        if self._device is not None:
+            image_string = self._device.screencap()
+            image = Image.open(io.BytesIO(image_string))
+            image = np.asarray(image)
+            image = cv2.cvtColor(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), cv2.COLOR_BGR2RGB)
+
+            return image
 
         else:
             handle_deviceNotSpecify()
